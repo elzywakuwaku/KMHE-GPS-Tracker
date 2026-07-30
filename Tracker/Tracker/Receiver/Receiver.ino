@@ -3,10 +3,9 @@
 #include <WiFi.h>
 #include <WebServer.h>
 
-// =====================================================
-// PIN LORA MRV RFM95W
-// =====================================================
-
+// =================================================
+// PIN LORA MRV RFM95W - ESP32 RECEIVER
+// =================================================
 #define LORA_SCK   18
 #define LORA_MISO  19
 #define LORA_MOSI  23
@@ -16,62 +15,47 @@
 
 #define LORA_BAND 915E6
 
-// =====================================================
-// WIFI HOTSPOT RECEIVER
-// =====================================================
-
-const char* AP_SSID = "KMHE-GPS";
-const char* AP_PASSWORD = "12345678";
+// =================================================
+// WIFI DIBUAT OLEH ESP32
+// =================================================
+const char* WIFI_NAME = "WiFi GPS Tracker";
+const char* WIFI_PASSWORD = "12345678";
 
 WebServer server(80);
 
-// =====================================================
+// =================================================
 // DATA DARI TRACKER
 // Format:
 // LAT,LON,SPEED,ALT,TEMP,SAT,FIX
-// =====================================================
-
+// =================================================
 double latitude = 0.0;
 double longitude = 0.0;
 
-float kecepatan = 0.0;
+float speedKmh = 0.0;
 float altitude = 0.0;
-float suhu = 0.0;
+float temperature = 0.0;
 
-int satelit = 0;
+int satellites = 0;
 int gpsFix = 0;
+int loraRSSI = 0;
 
-int rssi = 0;
+unsigned long lastPacket = 0;
 
-unsigned long waktuDataTerakhir = 0;
-
-// =====================================================
-// HALAMAN DASHBOARD
-// =====================================================
-
-const char HTML_PAGE[] PROGMEM = R"rawliteral(
-
+// =================================================
+// WEB DASHBOARD
+// =================================================
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
-
 <html>
-
 <head>
 
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 
-<meta
-name="viewport"
-content="width=device-width, initial-scale=1.0"
->
+<title>KMHE GPS Tracker</title>
 
-<title>
-KMHE GPS Tracker
-</title>
-
-<link
-rel="stylesheet"
-href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-/>
+<link rel="stylesheet"
+href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 
 <script
 src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
@@ -79,479 +63,209 @@ src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
 
 <style>
 
-* {
-
-box-sizing:
-border-box;
-
+body{
+  margin:0;
+  font-family:Arial,sans-serif;
+  background:#111827;
+  color:white;
 }
 
-body {
-
-margin: 0;
-
-font-family:
-Arial,
-sans-serif;
-
-background:
-#111827;
-
-color:
-white;
-
+header{
+  padding:16px;
+  text-align:center;
+  background:#0b1220;
 }
 
-header {
-
-padding:
-18px;
-
-text-align:
-center;
-
-background:
-#0f172a;
-
+header h2{
+  margin:0;
 }
 
-header h1 {
-
-margin:
-0;
-
-font-size:
-22px;
-
+header p{
+  margin:6px 0 0;
+  color:#aab4c4;
 }
 
-header p {
-
-margin:
-6px 0 0;
-
-color:
-#94a3b8;
-
+#map{
+  width:100%;
+  height:42vh;
 }
 
-#map {
-
-height:
-45vh;
-
-width:
-100%;
-
+#status{
+  margin:12px;
+  padding:12px;
+  border-radius:10px;
+  text-align:center;
+  background:#475569;
 }
 
-.grid {
-
-display:
-grid;
-
-grid-template-columns:
-repeat(
-2,
-1fr
-);
-
-gap:
-10px;
-
-padding:
-12px;
-
+.online{
+  background:#166534 !important;
 }
 
-.card {
-
-background:
-#1e293b;
-
-border-radius:
-14px;
-
-padding:
-15px;
-
-box-shadow:
-0 3px 12px
-rgba(
-0,
-0,
-0,
-0.25
-);
-
+.offline{
+  background:#991b1b !important;
 }
 
-.label {
-
-font-size:
-12px;
-
-color:
-#94a3b8;
-
+.grid{
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:10px;
+  padding:12px;
 }
 
-.value {
-
-font-size:
-22px;
-
-font-weight:
-bold;
-
-margin-top:
-6px;
-
+.card{
+  background:#1e293b;
+  padding:14px;
+  border-radius:12px;
 }
 
-.status {
-
-padding:
-12px;
-
-margin:
-0 12px 15px;
-
-border-radius:
-12px;
-
-text-align:
-center;
-
-background:
-#334155;
-
+.label{
+  color:#94a3b8;
+  font-size:13px;
 }
 
-.online {
-
-background:
-#166534;
-
-}
-
-.offline {
-
-background:
-#991b1b;
-
+.value{
+  font-size:21px;
+  font-weight:bold;
+  margin-top:6px;
 }
 
 </style>
-
 </head>
 
 <body>
 
 <header>
-
-<h1>
-KMHE GPS TRACKER
-</h1>
-
-<p>
-LoRa GPS & Temperature Monitor
-</p>
-
+<h2>KMHE GPS TRACKER</h2>
+<p>LoRa GPS & Temperature Monitor</p>
 </header>
 
 <div id="map"></div>
 
-<div
-id="status"
-class="status"
->
-
+<div id="status">
 Menunggu data tracker...
-
 </div>
 
 <div class="grid">
 
 <div class="card">
-
-<div class="label">
-Suhu
-</div>
-
-<div
-class="value"
-id="temp"
->
-
--- °C
-
-</div>
-
+<div class="label">Suhu</div>
+<div class="value" id="temp">-- °C</div>
 </div>
 
 <div class="card">
-
-<div class="label">
-Kecepatan
-</div>
-
-<div
-class="value"
-id="speed"
->
-
--- km/h
-
-</div>
-
+<div class="label">Kecepatan</div>
+<div class="value" id="speed">-- km/h</div>
 </div>
 
 <div class="card">
-
-<div class="label">
-Satelit
-</div>
-
-<div
-class="value"
-id="sat"
->
-
---
-
-</div>
-
+<div class="label">Satelit</div>
+<div class="value" id="sat">--</div>
 </div>
 
 <div class="card">
-
-<div class="label">
-Altitude
-</div>
-
-<div
-class="value"
-id="alt"
->
-
--- m
-
-</div>
-
+<div class="label">Altitude</div>
+<div class="value" id="alt">-- m</div>
 </div>
 
 <div class="card">
-
-<div class="label">
-Sinyal LoRa
-</div>
-
-<div
-class="value"
-id="rssi"
->
-
--- dBm
-
-</div>
-
+<div class="label">Sinyal LoRa</div>
+<div class="value" id="rssi">-- dBm</div>
 </div>
 
 <div class="card">
-
-<div class="label">
-GPS
-</div>
-
-<div
-class="value"
-id="gps"
->
-
---
-
-</div>
-
+<div class="label">Status GPS</div>
+<div class="value" id="gps">--</div>
 </div>
 
 </div>
 
 <script>
 
-let map =
-L.map(
-"map"
-).setView(
-[
--6.194,
-106.880
-],
+let map = L.map("map").setView(
+[-6.194,106.880],
 16
 );
 
 L.tileLayer(
-
 "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-
 {
-
-maxZoom:
-19,
-
-attribution:
-"OpenStreetMap"
-
+maxZoom:19,
+attribution:"OpenStreetMap"
 }
+).addTo(map);
 
-).addTo(
-map
-);
+let marker = L.marker(
+[-6.194,106.880]
+).addTo(map);
 
-let marker =
-L.marker(
-[
--6.194,
-106.880
-]
-).addTo(
-map
-);
+let firstLocation = true;
 
-async function
-updateData()
-{
+async function updateData(){
 
-try {
+try{
 
-const response =
-await fetch(
-"/data"
-);
+const response = await fetch("/data");
+const data = await response.json();
 
-const data =
-await response.json();
+document.getElementById("temp").innerHTML =
+data.temp + " °C";
 
-document
-.getElementById(
-"temp"
-)
-.innerHTML =
-data.temp
-+
-" °C";
+document.getElementById("speed").innerHTML =
+data.speed + " km/h";
 
-document
-.getElementById(
-"speed"
-)
-.innerHTML =
-data.speed
-+
-" km/h";
-
-document
-.getElementById(
-"sat"
-)
-.innerHTML =
+document.getElementById("sat").innerHTML =
 data.sat;
 
-document
-.getElementById(
-"alt"
-)
-.innerHTML =
-data.alt
-+
-" m";
+document.getElementById("alt").innerHTML =
+data.alt + " m";
 
-document
-.getElementById(
-"rssi"
-)
-.innerHTML =
-data.rssi
-+
-" dBm";
+document.getElementById("rssi").innerHTML =
+data.rssi + " dBm";
 
-document
-.getElementById(
-"gps"
-)
-.innerHTML =
-data.fix
-?
-"FIX"
-:
-"NO FIX";
+document.getElementById("gps").innerHTML =
+data.fix ? "GPS FIX" : "NO FIX";
 
 let status =
-document
-.getElementById(
-"status"
-);
+document.getElementById("status");
 
-if (
-data.online
-)
-{
+if(data.online){
 
-status
-.className =
-"status online";
+status.className = "online";
+status.innerHTML = "TRACKER ONLINE";
 
-status
-.innerHTML =
-"TRACKER ONLINE";
+}else{
 
-}
-else
-{
-
-status
-.className =
-"status offline";
-
-status
-.innerHTML =
-"TRACKER OFFLINE";
+status.className = "offline";
+status.innerHTML = "TRACKER OFFLINE";
 
 }
 
-if (
-data.fix
-)
-{
+if(data.fix){
 
-const posisi =
-[
+let position = [
 data.lat,
 data.lon
 ];
 
-marker
-.setLatLng(
-posisi
-);
+marker.setLatLng(position);
 
-map
-.setView(
-posisi,
+if(firstLocation){
+
+map.setView(
+position,
 17
 );
 
+firstLocation = false;
+
 }
 
 }
-catch (
-error
-)
-{
 
-console.log(
-error
-);
+}catch(error){
+
+console.log(error);
 
 }
 
@@ -567,46 +281,138 @@ updateData();
 </script>
 
 </body>
-
 </html>
-
 )rawliteral";
 
-// =====================================================
+// =================================================
+// HALAMAN UTAMA
+// =================================================
+void handleRoot(){
+
+server.send_P(
+200,
+"text/html",
+INDEX_HTML
+);
+
+}
+
+// =================================================
+// DATA JSON UNTUK DASHBOARD
+// =================================================
+void handleData(){
+
+bool online =
+(millis() - lastPacket) < 5000;
+
+String json = "{";
+
+json += "\"lat\":";
+json += String(latitude,6);
+
+json += ",\"lon\":";
+json += String(longitude,6);
+
+json += ",\"speed\":";
+json += String(speedKmh,1);
+
+json += ",\"alt\":";
+json += String(altitude,1);
+
+json += ",\"temp\":";
+json += String(temperature,1);
+
+json += ",\"sat\":";
+json += String(satellites);
+
+json += ",\"fix\":";
+json += String(gpsFix);
+
+json += ",\"rssi\":";
+json += String(loraRSSI);
+
+json += ",\"online\":";
+json += online ? "true" : "false";
+
+json += "}";
+
+server.send(
+200,
+"application/json",
+json
+);
+
+}
+
+// =================================================
+// MEMBACA DATA LORA
+// =================================================
+void parsePacket(String packet){
+
+double newLat;
+double newLon;
+
+float newSpeed;
+float newAltitude;
+float newTemperature;
+
+int newSat;
+int newFix;
+
+int result = sscanf(
+packet.c_str(),
+"%lf,%lf,%f,%f,%f,%d,%d",
+&newLat,
+&newLon,
+&newSpeed,
+&newAltitude,
+&newTemperature,
+&newSat,
+&newFix
+);
+
+if(result == 7){
+
+latitude = newLat;
+longitude = newLon;
+
+speedKmh = newSpeed;
+altitude = newAltitude;
+temperature = newTemperature;
+
+satellites = newSat;
+gpsFix = newFix;
+
+lastPacket = millis();
+
+Serial.println("DATA VALID");
+
+}else{
+
+Serial.println(
+"FORMAT DATA TIDAK SESUAI"
+);
+
+}
+
+}
+
+// =================================================
 // SETUP
-// =====================================================
+// =================================================
+void setup(){
 
-void setup() {
+Serial.begin(115200);
 
-Serial.begin(
-115200
-);
-
-delay(
-1000
-);
+delay(1000);
 
 Serial.println();
+Serial.println("================================");
+Serial.println("KMHE GPS RECEIVER");
+Serial.println("LoRa + WiFi Dashboard");
+Serial.println("================================");
 
-Serial.println(
-"================================"
-);
-
-Serial.println(
-"KMHE RECEIVER"
-);
-
-Serial.println(
-"LoRa + WiFi Dashboard"
-);
-
-Serial.println(
-"================================"
-);
-
-// -----------------------------------------------------
 // LORA
-// -----------------------------------------------------
 
 SPI.begin(
 LORA_SCK,
@@ -621,59 +427,37 @@ LORA_RST,
 LORA_DIO0
 );
 
-if (
-!LoRa.begin(
-LORA_BAND
-)
-)
-{
+if(
+!LoRa.begin(LORA_BAND)
+){
 
 Serial.println(
-"ERROR: LoRa gagal!"
+"LO RA GAGAL!"
 );
 
-while (
-true
-)
-{
-
-delay(
-1000
-);
-
+while(true){
+delay(1000);
 }
 
 }
 
-LoRa.setSpreadingFactor(
-7
-);
-
-LoRa.setSignalBandwidth(
-125E3
-);
-
-LoRa.setCodingRate4(
-5
-);
+LoRa.setSpreadingFactor(7);
+LoRa.setSignalBandwidth(125E3);
+LoRa.setCodingRate4(5);
 
 LoRa.enableCrc();
 
 Serial.println(
-"LoRa 915 MHz siap!"
+"LoRa 915 MHz SIAP"
 );
 
-// -----------------------------------------------------
 // WIFI ACCESS POINT
-// -----------------------------------------------------
 
-WiFi.mode(
-WIFI_AP
-);
+WiFi.mode(WIFI_AP);
 
 WiFi.softAP(
-AP_SSID,
-AP_PASSWORD
+WIFI_NAME,
+WIFI_PASSWORD
 );
 
 Serial.println();
@@ -683,7 +467,7 @@ Serial.print(
 );
 
 Serial.println(
-AP_SSID
+WIFI_NAME
 );
 
 Serial.print(
@@ -691,314 +475,83 @@ Serial.print(
 );
 
 Serial.println(
-AP_PASSWORD
+WIFI_PASSWORD
 );
 
 Serial.print(
-"IP Dashboard: "
+"IP: "
 );
 
 Serial.println(
 WiFi.softAPIP()
 );
 
-// -----------------------------------------------------
 // WEB SERVER
-// -----------------------------------------------------
 
 server.on(
 "/",
 HTTP_GET,
-[]()
-{
-
-server.send_P(
-200,
-"text/html",
-HTML_PAGE
-);
-
-}
+handleRoot
 );
 
 server.on(
 "/data",
 HTTP_GET,
-[]()
-{
-
-bool online =
-
-(
-millis()
--
-waktuDataTerakhir
-)
-
-<
-
-5000;
-
-String json = "{";
-
-json +=
-"\"lat\":";
-
-json +=
-String(
-latitude,
-6
-);
-
-json +=
-",";
-
-json +=
-"\"lon\":";
-
-json +=
-String(
-longitude,
-6
-);
-
-json +=
-",";
-
-json +=
-"\"speed\":";
-
-json +=
-String(
-kecepatan,
-1
-);
-
-json +=
-",";
-
-json +=
-"\"alt\":";
-
-json +=
-String(
-altitude,
-1
-);
-
-json +=
-",";
-
-json +=
-"\"temp\":";
-
-json +=
-String(
-suhu,
-2
-);
-
-json +=
-",";
-
-json +=
-"\"sat\":";
-
-json +=
-String(
-satelit
-);
-
-json +=
-",";
-
-json +=
-"\"fix\":";
-
-json +=
-String(
-gpsFix
-);
-
-json +=
-",";
-
-json +=
-"\"rssi\":";
-
-json +=
-String(
-rssi
-);
-
-json +=
-",";
-
-json +=
-"\"online\":";
-
-json +=
-online
-?
-"true"
-:
-"false";
-
-json +=
-"}";
-
-server.send(
-200,
-"application/json",
-json
-);
-
-}
+handleData
 );
 
 server.begin();
 
 Serial.println(
-"Web server siap!"
+"WEB SERVER SIAP"
 );
 
 }
 
-// =====================================================
+// =================================================
 // LOOP
-// =====================================================
-
-void loop() {
+// =================================================
+void loop(){
 
 server.handleClient();
 
 int packetSize =
-
 LoRa.parsePacket();
 
-if (
-packetSize
-)
-{
+if(packetSize){
 
-String data = "";
+String packet = "";
 
-while (
+while(
 LoRa.available()
-)
-{
+){
 
-data +=
-(char)
-LoRa.read();
+packet +=
+(char)LoRa.read();
 
 }
 
-rssi =
+loraRSSI =
 LoRa.packetRssi();
 
 Serial.print(
-"Data masuk: "
+"DATA MASUK: "
 );
 
 Serial.println(
-data
+packet
 );
 
-bacaData(
-data
+Serial.print(
+"RSSI: "
 );
-
-}
-
-}
-
-// =====================================================
-// MEMBACA DATA LORA
-// =====================================================
-
-void bacaData(
-String data
-)
-{
-
-double latBaru = 0;
-
-double lonBaru = 0;
-
-float speedBaru = 0;
-
-float altBaru = 0;
-
-float suhuBaru = 0;
-
-int satBaru = 0;
-
-int fixBaru = 0;
-
-int hasil =
-
-sscanf(
-
-data.c_str(),
-
-"%lf,%lf,%f,%f,%f,%d,%d",
-
-&latBaru,
-
-&lonBaru,
-
-&speedBaru,
-
-&altBaru,
-
-&suhuBaru,
-
-&satBaru,
-
-&fixBaru
-
-);
-
-if (
-hasil == 7
-)
-{
-
-latitude =
-latBaru;
-
-longitude =
-lonBaru;
-
-kecepatan =
-speedBaru;
-
-altitude =
-altBaru;
-
-suhu =
-suhuBaru;
-
-satelit =
-satBaru;
-
-gpsFix =
-fixBaru;
-
-waktuDataTerakhir =
-millis();
 
 Serial.println(
-"DATA VALID"
+loraRSSI
 );
 
-}
-else
-{
-
-Serial.println(
-"FORMAT DATA SALAH"
+parsePacket(
+packet
 );
 
 }
